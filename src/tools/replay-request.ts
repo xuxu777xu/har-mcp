@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getDb } from '../db/connection.js';
+import { TRUNCATE_LIMIT } from '../utils/truncate.js';
 
 /** Headers that should not be forwarded when replaying a request. */
 const STRIP_HEADERS = new Set([
@@ -9,6 +10,8 @@ const STRIP_HEADERS = new Set([
   'connection',
   'transfer-encoding',
 ]);
+
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export function registerReplayRequest(server: McpServer): void {
   server.registerTool(
@@ -30,8 +33,10 @@ export function registerReplayRequest(server: McpServer): void {
     async (args) => {
       const db = getDb();
 
-      const row = db.prepare('SELECT * FROM entries WHERE id = ?').get(args.entryId) as
-        | Record<string, unknown>
+      const row = db.prepare(
+        'SELECT method, url, requestHeaders, postDataText FROM entries WHERE id = ?'
+      ).get(args.entryId) as
+        | { method: string; url: string; requestHeaders: string | null; postDataText: string | null }
         | undefined;
 
       if (!row) {
@@ -43,7 +48,7 @@ export function registerReplayRequest(server: McpServer): void {
 
       // --- Build headers ---
       let headers: Record<string, string> = {};
-      if (typeof row.requestHeaders === 'string') {
+      if (row.requestHeaders) {
         try {
           const parsed = JSON.parse(row.requestHeaders);
           if (Array.isArray(parsed)) {
@@ -81,7 +86,8 @@ export function registerReplayRequest(server: McpServer): void {
 
       // --- Build body ---
       let body: string | undefined;
-      const rawBody = row.postDataText as string | null;
+      let warning: string | undefined;
+      const rawBody = row.postDataText;
 
       if (rawBody != null) {
         if (args.bodyOverrides) {
@@ -91,26 +97,32 @@ export function registerReplayRequest(server: McpServer): void {
             Object.assign(parsed, args.bodyOverrides);
             body = JSON.stringify(parsed);
           } catch {
-            // Not JSON – send raw body as-is
+            // Not JSON – send raw body as-is, warn about ignored overrides
             body = rawBody;
+            warning = 'bodyOverrides ignored: request body is not JSON';
           }
         } else {
           body = rawBody;
         }
       }
 
-      const method = (row.method as string) || 'GET';
-      const url = row.url as string;
+      const method = row.method || 'GET';
+      const url = row.url;
 
-      // --- Send request ---
+      // --- Send request with timeout ---
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       const start = Date.now();
+
       try {
         const resp = await fetch(url, {
           method,
           headers,
           body: ['GET', 'HEAD'].includes(method.toUpperCase()) ? undefined : body,
+          signal: controller.signal,
         });
 
+        clearTimeout(timeout);
         const timeTaken = Date.now() - start;
 
         // Collect response headers
@@ -119,36 +131,41 @@ export function registerReplayRequest(server: McpServer): void {
           responseHeaders[key] = value;
         });
 
-        // Read body, truncate if > 50KB
-        const MAX_BODY = 50 * 1024;
+        // Read body, truncate using shared limit
         let responseBody = await resp.text();
         let truncated = false;
-        if (responseBody.length > MAX_BODY) {
-          responseBody = responseBody.slice(0, MAX_BODY);
+        if (responseBody.length > TRUNCATE_LIMIT) {
+          responseBody = responseBody.slice(0, TRUNCATE_LIMIT);
           truncated = true;
         }
 
-        const result = {
+        const result: Record<string, unknown> = {
           status: resp.status,
           statusText: resp.statusText,
           responseHeaders,
           responseBody,
-          ...(truncated ? { _note: 'Response body truncated to 50KB' } : {}),
           timeTaken,
         };
+        if (truncated) result._note = `Response body truncated to ${TRUNCATE_LIMIT} chars`;
+        if (warning) result._warning = warning;
 
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
         };
       } catch (err: unknown) {
+        clearTimeout(timeout);
         const timeTaken = Date.now() - start;
         const message = err instanceof Error ? err.message : String(err);
+        const isTimeout = err instanceof Error && err.name === 'AbortError';
 
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ error: `Fetch failed: ${message}`, timeTaken }, null, 2),
+              text: JSON.stringify({
+                error: isTimeout ? `Request timed out after ${REQUEST_TIMEOUT_MS}ms` : `Fetch failed: ${message}`,
+                timeTaken,
+              }, null, 2),
             },
           ],
           isError: true,

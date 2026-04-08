@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
-import { initSchema } from './schema.js';
+import { initSchema, migrateSchema } from './schema.js';
 
 const CACHE_DIR = '.har-cache';
 
@@ -21,6 +21,7 @@ export function getDb(): Database.Database {
   db.exec('PRAGMA foreign_keys = ON');
 
   initSchema(db);
+  migrateSchema(db);
 
   return db;
 }

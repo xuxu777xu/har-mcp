@@ -10,10 +10,13 @@ export function registerTraceValue(server: McpServer): void {
       inputSchema: z.object({
         value: z.string().describe('The value to search for across all request/response fields'),
         sessionId: z.string().optional().describe('Filter by session ID'),
+        limit: z.number().int().min(1).max(500).default(100).optional()
+          .describe('Maximum number of matching entries to return (default: 100)'),
       }),
     },
     async (args) => {
       const db = getDb();
+      const resultLimit = args.limit ?? 100;
 
       const conditions: string[] = [];
       const params: unknown[] = [];
@@ -35,20 +38,22 @@ export function registerTraceValue(server: McpServer): void {
 
       const searchCondition = `(${fieldChecks.join(' OR ')})`;
       conditions.push(searchCondition);
-      // Add the LIKE pattern for each field
       for (let i = 0; i < fieldChecks.length; i++) {
         params.push(likePattern);
       }
 
       const whereClause = 'WHERE ' + conditions.join(' AND ');
 
+      // Avoid loading full responseBody into JS — use SQL CASE to flag matches
       const entries = db.prepare(
         `SELECT id, method, url, startedDateTime,
                 requestHeaders, queryString, postDataText,
-                responseHeaders, responseBody
+                responseHeaders,
+                CASE WHEN responseBody LIKE ? THEN 1 ELSE 0 END AS bodyMatch
          FROM entries ${whereClause}
-         ORDER BY startedDateTime ASC`
-      ).all(...params) as Array<{
+         ORDER BY startedDateTime ASC
+         LIMIT ?`
+      ).all(likePattern, ...params, resultLimit) as Array<{
         id: string;
         method: string;
         url: string;
@@ -57,7 +62,7 @@ export function registerTraceValue(server: McpServer): void {
         queryString: string | null;
         postDataText: string | null;
         responseHeaders: string | null;
-        responseBody: string | null;
+        bodyMatch: number;
       }>;
 
       interface Occurrence {
@@ -85,7 +90,7 @@ export function registerTraceValue(server: McpServer): void {
         if (entry.responseHeaders && entry.responseHeaders.includes(args.value)) {
           locations.push('responseHeader');
         }
-        if (entry.responseBody && entry.responseBody.includes(args.value)) {
+        if (entry.bodyMatch === 1) {
           locations.push('responseBody');
         }
 

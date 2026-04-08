@@ -1,6 +1,10 @@
-import { parser } from 'stream-json';
-import { pick } from 'stream-json/filters/Pick.js';
-import { streamArray } from 'stream-json/streamers/StreamArray.js';
+import streamJson from 'stream-json';
+import Pick from 'stream-json/filters/Pick.js';
+import StreamArray from 'stream-json/streamers/StreamArray.js';
+
+const { parser } = streamJson;
+const { pick } = Pick;
+const { streamArray } = StreamArray;
 import { pipeline } from 'stream/promises';
 import { Writable } from 'stream';
 import fs from 'fs';
@@ -28,7 +32,8 @@ export async function parseHarFile(filePath: string, sessionId: string): Promise
       postDataMimeType, postDataText,
       status, statusText, responseMimeType,
       responseHeaders, responseBody, responseBodyLength, responseSize,
-      urlPattern
+      urlPattern,
+      serverIPAddress, connection, comment, requestBodySize
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
@@ -36,7 +41,8 @@ export async function parseHarFile(filePath: string, sessionId: string): Promise
       ?, ?,
       ?, ?, ?,
       ?, ?, ?, ?,
-      ?
+      ?,
+      ?, ?, ?, ?
     )
   `);
 
@@ -120,6 +126,11 @@ export async function parseHarFile(filePath: string, sessionId: string): Promise
           const responseBodyLength = bodyResult.originalLength;
           const responseSize = res.content?.size ?? 0;
 
+          const serverIPAddress = entry.serverIPAddress ?? null;
+          const connection = entry.connection ?? null;
+          const comment = entry.comment ?? null;
+          const requestBodySize = req.bodySize ?? null;
+
           batch.push([
             id, sessionId, startedDateTime, time,
             method, url, domain, pathname, httpVersion,
@@ -128,6 +139,7 @@ export async function parseHarFile(filePath: string, sessionId: string): Promise
             status, statusText, responseMimeType,
             responseHeaders, responseBody, responseBodyLength, responseSize,
             urlPattern,
+            serverIPAddress, connection, comment, requestBodySize,
           ]);
 
           entryCount++;
@@ -168,6 +180,7 @@ interface HarRequest {
   cookies?: unknown[];
   queryString?: unknown[];
   postData?: { mimeType?: string; text?: string };
+  bodySize?: number;
 }
 
 interface HarResponse {
@@ -182,4 +195,7 @@ interface HarEntry {
   time?: number;
   request?: HarRequest;
   response?: HarResponse;
+  serverIPAddress?: string;
+  connection?: string;
+  comment?: string;
 }

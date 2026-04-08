@@ -32,9 +32,14 @@ function parseHeaders(raw: string | null | undefined): Record<string, string> {
   return {};
 }
 
-/** Escape a string for use inside single quotes in shell commands. */
+/** Escape a string for safe use inside $'...' shell syntax. */
 function shellEscape(s: string): string {
-  return s.replace(/'/g, "'\\''");
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
 }
 
 // ---------------------------------------------------------------------------
@@ -47,14 +52,14 @@ function generateCurl(
   headers: Record<string, string>,
   body: string | null,
 ): string {
-  const parts: string[] = [`curl -X ${method} '${shellEscape(url)}'`];
+  const parts: string[] = [`curl -X ${method} $'${shellEscape(url)}'`];
 
   for (const [name, value] of Object.entries(headers)) {
-    parts.push(`  -H '${shellEscape(name)}: ${shellEscape(value)}'`);
+    parts.push(`  -H $'${shellEscape(name)}: ${shellEscape(value)}'`);
   }
 
   if (body) {
-    parts.push(`  -d '${shellEscape(body)}'`);
+    parts.push(`  --data-raw $'${shellEscape(body)}'`);
   }
 
   return parts.join(' \\\n');
@@ -72,24 +77,23 @@ function generatePython(
 
   // Determine body kwarg
   let bodyKwarg = '';
-  let parsedBody: unknown = null;
   if (body) {
     try {
-      parsedBody = JSON.parse(body);
+      const parsedBody = JSON.parse(body);
       bodyKwarg = `    json=${jsonToPython(parsedBody)},`;
     } catch {
-      bodyKwarg = `    data='${body.replace(/'/g, "\\'")}',`;
+      bodyKwarg = `    data='${body.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}',`;
     }
   }
 
   const methodLower = method.toLowerCase();
 
-  lines.push(`response = requests.${methodLower}('${url}',`);
+  lines.push(`response = requests.${methodLower}('${url.replace(/'/g, "\\'")}',`);
 
   if (headerEntries.length > 0) {
     lines.push('    headers={');
     for (const [name, value] of headerEntries) {
-      lines.push(`        '${name}': '${value.replace(/'/g, "\\'")}',`);
+      lines.push(`        '${name.replace(/'/g, "\\'")}': '${value.replace(/'/g, "\\'")}',`);
     }
     lines.push('    },');
   }
@@ -120,22 +124,21 @@ function generateJavascript(
   if (headerEntries.length > 0) {
     opts.push('  headers: {');
     for (const [name, value] of headerEntries) {
-      opts.push(`    '${name}': '${value.replace(/'/g, "\\'")}',`);
+      opts.push(`    '${name.replace(/'/g, "\\'")}': '${value.replace(/'/g, "\\'")}',`);
     }
     opts.push('  },');
   }
 
   if (body) {
-    let parsedBody: unknown = null;
     try {
-      parsedBody = JSON.parse(body);
+      const parsedBody = JSON.parse(body);
       opts.push(`  body: JSON.stringify(${JSON.stringify(parsedBody)}),`);
     } catch {
-      opts.push(`  body: '${body.replace(/'/g, "\\'")}',`);
+      opts.push(`  body: '${body.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}',`);
     }
   }
 
-  lines.push(`const response = await fetch('${url}', {`);
+  lines.push(`const response = await fetch('${url.replace(/'/g, "\\'")}', {`);
   lines.push(...opts);
   lines.push('});');
   lines.push('const data = await response.text();');
@@ -150,7 +153,7 @@ function generateHttpie(
   headers: Record<string, string>,
   body: string | null,
 ): string {
-  const parts: string[] = [`http ${method} ${url}`];
+  const parts: string[] = [`http ${method} $'${shellEscape(url)}'`];
 
   for (const [name, value] of Object.entries(headers)) {
     parts.push(`  ${name}:${value}`);
@@ -170,9 +173,8 @@ function generateHttpie(
         }
       }
     } catch {
-      // Non-JSON body — not directly representable in httpie shorthand
-      // Fall back to piped input note
-      return `echo '${shellEscape(body)}' | ${parts.join(' \\\n')}`;
+      // Non-JSON body — fall back to piped input
+      return `echo $'${shellEscape(body)}' | ${parts.join(' \\\n')}`;
     }
   }
 
@@ -185,7 +187,7 @@ function jsonToPython(value: unknown): string {
   if (value === true) return 'True';
   if (value === false) return 'False';
   if (typeof value === 'number') return String(value);
-  if (typeof value === 'string') return `'${value.replace(/'/g, "\\'")}'`;
+  if (typeof value === 'string') return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
   if (Array.isArray(value)) {
     return `[${value.map(jsonToPython).join(', ')}]`;
   }
@@ -221,8 +223,10 @@ export function registerExportRequest(server: McpServer): void {
     async (args) => {
       const db = getDb();
 
-      const row = db.prepare('SELECT * FROM entries WHERE id = ?').get(args.entryId) as
-        | Record<string, unknown>
+      const row = db.prepare(
+        'SELECT method, url, requestHeaders, postDataText FROM entries WHERE id = ?'
+      ).get(args.entryId) as
+        | { method: string; url: string; requestHeaders: string | null; postDataText: string | null }
         | undefined;
 
       if (!row) {
@@ -233,7 +237,7 @@ export function registerExportRequest(server: McpServer): void {
       }
 
       // Build headers
-      let headers = parseHeaders(row.requestHeaders as string | null);
+      let headers = parseHeaders(row.requestHeaders);
 
       if (args.headerOverrides) {
         Object.assign(headers, args.headerOverrides);
@@ -244,9 +248,9 @@ export function registerExportRequest(server: McpServer): void {
         Object.entries(headers).filter(([name]) => !isPseudoHeader(name)),
       );
 
-      const method = (row.method as string) || 'GET';
-      const url = row.url as string;
-      const body = (row.postDataText as string) || null;
+      const method = row.method || 'GET';
+      const url = row.url;
+      const body = row.postDataText || null;
 
       const generators: Record<ExportFormat, () => string> = {
         curl: () => generateCurl(method, url, headers, body),

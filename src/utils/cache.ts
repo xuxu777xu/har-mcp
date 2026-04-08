@@ -19,16 +19,19 @@ export function checkCache(filePath: string): CacheCheckResult {
 
   try {
     const stat = fs.statSync(absPath);
-    if (stat.size === session.fileSize && stat.mtime.toISOString() === session.fileMtime) {
+    const storedMtime = new Date(session.fileMtime).getTime();
+    if (stat.size === session.fileSize && stat.mtime.getTime() === storedMtime) {
       return { valid: true, sessionId: session.id };
     }
   } catch {
     // File may have been deleted
   }
 
-  // Cache invalid — delete old session and entries
-  db.prepare('DELETE FROM entries WHERE sessionId = ?').run(session.id);
-  db.prepare('DELETE FROM sessions WHERE id = ?').run(session.id);
+  // Cache invalid — delete old session and entries in a single transaction
+  db.transaction(() => {
+    db.prepare('DELETE FROM entries WHERE sessionId = ?').run(session.id);
+    db.prepare('DELETE FROM sessions WHERE id = ?').run(session.id);
+  })();
 
   return { valid: false };
 }

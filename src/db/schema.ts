@@ -39,7 +39,12 @@ export function initSchema(db: Database.Database): void {
       responseBodyLength INTEGER,
       responseSize      INTEGER,
 
-      urlPattern        TEXT NOT NULL
+      urlPattern        TEXT NOT NULL,
+
+      serverIPAddress   TEXT,
+      connection        TEXT,
+      comment           TEXT,
+      requestBodySize   INTEGER
     );
 
     CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(sessionId);
@@ -49,4 +54,26 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_entries_urlPattern ON entries(urlPattern);
     CREATE INDEX IF NOT EXISTS idx_entries_time ON entries(startedDateTime);
   `);
+}
+
+/** Migrate existing databases to the latest schema version. */
+export function migrateSchema(db: Database.Database): void {
+  const version = (db.pragma('user_version', { simple: true }) as number) ?? 0;
+
+  if (version < 1) {
+    const newColumns = [
+      'serverIPAddress TEXT',
+      'connection TEXT',
+      'comment TEXT',
+      'requestBodySize INTEGER',
+    ];
+    for (const col of newColumns) {
+      try {
+        db.exec(`ALTER TABLE entries ADD COLUMN ${col}`);
+      } catch {
+        // Column already exists — safe to ignore
+      }
+    }
+    db.pragma('user_version = 1');
+  }
 }

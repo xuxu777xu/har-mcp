@@ -11,6 +11,11 @@ import { registerExtractParamsSchema } from './tools/extract-params-schema.js';
 import { registerDiffRequests } from './tools/diff-requests.js';
 import { registerReplayRequest } from './tools/replay-request.js';
 import { registerExportRequest } from './tools/export-request.js';
+import { registerDecodeValue } from './tools/decode-value.js';
+import { registerAnalyzeAuth } from './tools/analyze-auth.js';
+import { registerAnalyzeCookies } from './tools/analyze-cookies.js';
+import { registerAnalyzeTiming } from './tools/analyze-timing.js';
+import { registerDetectEncryption } from './tools/detect-encryption.js';
 
 export function registerAllTools(server: McpServer): void {
   registerLoadHar(server);
@@ -25,4 +30,9 @@ export function registerAllTools(server: McpServer): void {
   registerDiffRequests(server);
   registerReplayRequest(server);
   registerExportRequest(server);
+  registerDecodeValue(server);
+  registerAnalyzeAuth(server);
+  registerAnalyzeCookies(server);
+  registerAnalyzeTiming(server);
+  registerDetectEncryption(server);
 }

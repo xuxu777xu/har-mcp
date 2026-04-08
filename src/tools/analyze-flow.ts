@@ -2,11 +2,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getDb } from '../db/connection.js';
 
+const MIN_VALUE_LENGTH = 8;
+const MAX_RECENT_BODIES = 20;
+
 export function registerAnalyzeFlow(server: McpServer): void {
   server.registerTool(
     'analyze_flow',
     {
-      description: 'Reconstruct business flow from request sequence',
+      description: 'Reconstruct business flow from request sequence with optimized dependency detection',
       inputSchema: z.object({
         sessionId: z.string().optional().describe('Filter by session ID'),
         domain: z.string().optional().describe('Filter by domain'),
@@ -57,8 +60,11 @@ export function registerAnalyzeFlow(server: McpServer): void {
         responseBody: string | null;
       }>;
 
-      // Build a map of previous response bodies for dependency detection
-      const previousResponses: Array<{ entryId: string; body: string }> = [];
+      // --- Optimized dependency detection using inverted index ---
+      // Map: token (string value from response) → entryId
+      const tokenIndex = new Map<string, string>();
+      // Keep recent response bodies for substring fallback
+      const recentBodies: Array<{ entryId: string; body: string }> = [];
 
       interface FlowStep {
         order: number;
@@ -91,7 +97,7 @@ export function registerAnalyzeFlow(server: McpServer): void {
           try {
             const qs = JSON.parse(entry.queryString) as Array<{ name: string; value: string }>;
             for (const p of qs) {
-              if (p.value && p.value.length > 8) {
+              if (p.value && p.value.length > MIN_VALUE_LENGTH) {
                 requestValues.push(p.value);
               }
             }
@@ -105,30 +111,62 @@ export function registerAnalyzeFlow(server: McpServer): void {
               extractValues(body, requestValues);
             }
           } catch {
-            // Not JSON — treat as raw text, check if the whole thing appears
-            if (entry.postDataText.length > 8) {
+            if (entry.postDataText.length > MIN_VALUE_LENGTH) {
               requestValues.push(entry.postDataText);
             }
           }
         }
 
         // Check if any request value appeared in a previous response
+        // Phase 1: O(1) lookup in inverted index (exact match)
         for (const val of requestValues) {
-          for (const prev of previousResponses) {
-            if (prev.body.includes(val)) {
-              step.dependsOn = prev.entryId;
-              step.note = `Value "${val.length > 40 ? val.slice(0, 40) + '...' : val}" from response of ${prev.entryId}`;
-              break;
-            }
+          const sourceId = tokenIndex.get(val);
+          if (sourceId) {
+            step.dependsOn = sourceId;
+            step.note = `Value "${val.length > 40 ? val.slice(0, 40) + '...' : val}" from response of ${sourceId}`;
+            break;
           }
-          if (step.dependsOn) break;
+        }
+
+        // Phase 2: substring search in recent bodies only (fallback)
+        if (!step.dependsOn) {
+          for (const val of requestValues) {
+            for (const prev of recentBodies) {
+              if (prev.body.includes(val)) {
+                step.dependsOn = prev.entryId;
+                step.note = `Value "${val.length > 40 ? val.slice(0, 40) + '...' : val}" from response of ${prev.entryId}`;
+                break;
+              }
+            }
+            if (step.dependsOn) break;
+          }
         }
 
         steps.push(step);
 
-        // Add this entry's response body to the lookup pool
+        // Index this entry's response body tokens for future lookups
         if (entry.responseBody) {
-          previousResponses.push({ entryId: entry.id, body: entry.responseBody });
+          // Extract JSON string values as exact tokens
+          try {
+            const body = JSON.parse(entry.responseBody);
+            if (body && typeof body === 'object') {
+              const tokens: string[] = [];
+              extractValues(body, tokens);
+              for (const token of tokens) {
+                if (!tokenIndex.has(token)) {
+                  tokenIndex.set(token, entry.id);
+                }
+              }
+            }
+          } catch {
+            // Not JSON — skip indexing, rely on substring fallback
+          }
+
+          // Maintain recent bodies window for substring search
+          recentBodies.push({ entryId: entry.id, body: entry.responseBody });
+          if (recentBodies.length > MAX_RECENT_BODIES) {
+            recentBodies.shift();
+          }
         }
       }
 
@@ -144,10 +182,10 @@ export function registerAnalyzeFlow(server: McpServer): void {
   );
 }
 
-/** Recursively extract string values longer than 8 chars from an object */
+/** Recursively extract string values longer than MIN_VALUE_LENGTH from an object */
 function extractValues(obj: unknown, out: string[]): void {
   if (typeof obj === 'string') {
-    if (obj.length > 8) out.push(obj);
+    if (obj.length > MIN_VALUE_LENGTH) out.push(obj);
     return;
   }
   if (Array.isArray(obj)) {

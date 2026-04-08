@@ -1,14 +1,20 @@
 declare module 'stream-json' {
   import { Transform } from 'stream';
-  export function parser(): Transform;
+  function parser(): Transform;
+  export default { parser };
+  export { parser };
 }
 
 declare module 'stream-json/filters/Pick.js' {
   import { Transform } from 'stream';
-  export function pick(options: { filter: string }): Transform;
+  function pick(options: { filter: string }): Transform;
+  export default { pick };
+  export { pick };
 }
 
 declare module 'stream-json/streamers/StreamArray.js' {
   import { Transform } from 'stream';
-  export function streamArray(): Transform;
+  function streamArray(): Transform;
+  export default { streamArray };
+  export { streamArray };
 }

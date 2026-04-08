@@ -2,15 +2,41 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getDb } from '../db/connection.js';
 
+/** Recursively flatten a JSON object into dot-separated key-value pairs. */
+function flattenKeys(obj: unknown, prefix = ''): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (obj === null || obj === undefined) return result;
+  if (typeof obj !== 'object') {
+    result[prefix] = String(obj);
+    return result;
+  }
+  if (Array.isArray(obj)) {
+    for (let i = 0; i < obj.length; i++) {
+      Object.assign(result, flattenKeys(obj[i], prefix ? `${prefix}[${i}]` : `[${i}]`));
+    }
+    return result;
+  }
+  for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+    const fullKey = prefix ? `${prefix}.${key}` : key;
+    if (val !== null && typeof val === 'object') {
+      Object.assign(result, flattenKeys(val, fullKey));
+    } else {
+      result[fullKey] = String(val ?? '');
+    }
+  }
+  return result;
+}
+
 export function registerDiffRequests(server: McpServer): void {
   server.registerTool(
     'diff_requests',
     {
       description: 'Compare multiple requests to find static vs dynamic parameters',
       inputSchema: z.object({
-        entryIds: z.array(z.string()).min(2).optional().describe('Specific entry IDs to compare (2 or more)'),
+        entryIds: z.array(z.string()).min(2).optional().describe('Specific entry IDs to compare (2 or more, can be cross-session)'),
         urlPattern: z.string().optional().describe('Auto-select entries by URL pattern'),
-        sessionId: z.string().optional().describe('Filter by session ID (used with urlPattern)'),
+        sessionId: z.string().optional().describe('Filter by single session ID (used with urlPattern)'),
+        sessionIds: z.array(z.string()).optional().describe('Filter by multiple session IDs for cross-session comparison (used with urlPattern)'),
       }),
     },
     async (args) => {
@@ -34,10 +60,16 @@ export function registerDiffRequests(server: McpServer): void {
       } else if (args.urlPattern) {
         const conditions: string[] = ['urlPattern = ?'];
         const params: unknown[] = [args.urlPattern];
-        if (args.sessionId) {
+
+        if (args.sessionIds && args.sessionIds.length > 0) {
+          const placeholders = args.sessionIds.map(() => '?').join(',');
+          conditions.push(`sessionId IN (${placeholders})`);
+          params.push(...args.sessionIds);
+        } else if (args.sessionId) {
           conditions.push('sessionId = ?');
           params.push(args.sessionId);
         }
+
         const whereClause = 'WHERE ' + conditions.join(' AND ');
         entries = db.prepare(
           `SELECT id, queryString, postDataText, requestHeaders
@@ -78,17 +110,15 @@ export function registerDiffRequests(server: McpServer): void {
         allQueryParams.push(params);
       }
 
-      // --- Parse body params per entry ---
+      // --- Parse body params per entry (recursive flatten) ---
       const allBodyParams: Array<Record<string, string>> = [];
       for (const entry of entries) {
-        const params: Record<string, string> = {};
+        let params: Record<string, string> = {};
         if (entry.postDataText) {
           try {
             const body = JSON.parse(entry.postDataText);
-            if (body && typeof body === 'object' && !Array.isArray(body)) {
-              for (const [key, val] of Object.entries(body as Record<string, unknown>)) {
-                params[key] = String(val);
-              }
+            if (body && typeof body === 'object') {
+              params = flattenKeys(body);
             }
           } catch { /* not JSON */ }
         }
@@ -166,7 +196,6 @@ function classifyParams(
     const unique = [...new Set(values)];
 
     if (unique.length === 1) {
-      // Same value in all entries where it exists
       staticParams[key] = unique[0];
     } else {
       dynamicParams[key] = {
