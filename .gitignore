@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.har-cache/
+har样本/
+*.db
+*.db-journal
+*.db-wal
