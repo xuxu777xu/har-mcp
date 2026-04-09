@@ -22,27 +22,23 @@ har-mcp is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) se
 
 ## Quick Start
 
-### Install
+### Install via npm (Recommended)
 
 ```bash
-# Clone and build
+# No clone needed — just configure and use
+claude mcp add -s user har-mcp -- npx -y @xuxu7777xu/har-mcp
+```
+
+### Install from source
+
+```bash
 git clone https://github.com/xuxu777xu/har-mcp.git
 cd har-mcp
-npm install
-npm run build
-```
-
-### Add to Claude Code
-
-```bash
-# User-level (available in all projects)
+npm install && npm run build
 claude mcp add -s user har-mcp -- node /path/to/har-mcp/dist/index.js
-
-# Project-level
-claude mcp add har-mcp -- node /path/to/har-mcp/dist/index.js
 ```
 
-### Add to Claude Desktop
+### Claude Desktop
 
 Add to `claude_desktop_config.json`:
 
@@ -50,8 +46,8 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "har-mcp": {
-      "command": "node",
-      "args": ["/path/to/har-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@xuxu7777xu/har-mcp"]
     }
   }
 }
@@ -155,24 +151,20 @@ har-mcp 是一个 [MCP (Model Context Protocol)](https://modelcontextprotocol.io
 
 ## 快速开始
 
-### 安装
+### 通过 npm 安装（推荐）
 
 ```bash
-# 克隆并构建
-git clone https://github.com/xuxu777xu/har-mcp.git
-cd har-mcp
-npm install
-npm run build
+# 无需克隆项目，一行搞定
+claude mcp add -s user har-mcp -- npx -y @xuxu7777xu/har-mcp
 ```
 
-### 添加到 Claude Code
+### 从源码安装
 
 ```bash
-# 用户级（所有项目可用）
+git clone https://github.com/xuxu777xu/har-mcp.git
+cd har-mcp
+npm install && npm run build
 claude mcp add -s user har-mcp -- node /path/to/har-mcp/dist/index.js
-
-# 项目级
-claude mcp add har-mcp -- node /path/to/har-mcp/dist/index.js
 ```
 
 ### 添加到 Claude Desktop
@@ -183,8 +175,8 @@ claude mcp add har-mcp -- node /path/to/har-mcp/dist/index.js
 {
   "mcpServers": {
     "har-mcp": {
-      "command": "node",
-      "args": ["/path/to/har-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@xuxu7777xu/har-mcp"]
     }
   }
 }
