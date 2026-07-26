@@ -2,7 +2,6 @@
 
 **AI-powered HAR traffic analysis MCP server for reverse engineering HTTP APIs.**
 
-[English](#english) | [中文](#中文)
 
 ---
 
